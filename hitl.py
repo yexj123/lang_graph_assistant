@@ -30,10 +30,12 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
-HumanAction = Literal["approve", "research", "revise", "remember", "empty"]
+HumanAction = Literal[
+    "approve", "research", "revise", "remember", "export", "memories", "forget", "empty"
+]
 
 # Optional whitespace either side of the colon: "Revise : tighten the intro" is a command.
-_COMMAND_RE = re.compile(r"^(remember|research|revise)\s*:\s*(.*)$", re.IGNORECASE | re.DOTALL)
+_COMMAND_RE = re.compile(r"^(remember|research|revise|export|save|forget)\s*:\s*(.*)$", re.IGNORECASE | re.DOTALL)
 
 # Whole-input matches only. Anything longer is feedback, however affirmative it sounds.
 _APPROVAL_WORDS = frozenset(
@@ -46,6 +48,13 @@ _APPROVAL_WORDS = frozenset(
         "ship it", "done",
     }
 )
+
+# Bare-word export, matched the same whole-input way as approval. `export: <dir>` goes
+# through _COMMAND_RE above and carries a destination directory as its payload.
+_EXPORT_WORDS = frozenset({"export", "save", "save it", "export it", "write it out"})
+
+# Listing constraints is read-only, so it is a bare word with no payload.
+_MEMORY_WORDS = frozenset({"memories", "constraints", "list memories", "show memories"})
 
 # Trailing punctuation and surrounding quotes carry no meaning here.
 _TRIM = " \t.!,;:'\"()"
@@ -65,6 +74,9 @@ class HumanDecision:
             "research": "sending it back for more research",
             "revise": "sending it back for a writing revision",
             "remember": "saving a durable constraint, then revising",
+            "export": "writing the current draft to a file, then asking again",
+            "memories": "listing the durable constraints, then asking again",
+            "forget": "deleting a durable constraint, then asking again",
             "empty": "no decision entered",
         }[self.action]
 
@@ -78,9 +90,18 @@ def parse_human_decision(raw: object) -> HumanDecision:
     command = _COMMAND_RE.match(text)
     if command:
         action = command.group(1).lower()
+        if action == "save":
+            action = "export"
         return HumanDecision(action, command.group(2).strip())  # type: ignore[arg-type]
 
-    if text.lower().strip(_TRIM) in _APPROVAL_WORDS:
+    normalised = text.lower().strip(_TRIM)
+    if normalised in _APPROVAL_WORDS:
         return HumanDecision("approve")
+
+    if normalised in _EXPORT_WORDS:
+        return HumanDecision("export")
+
+    if normalised in _MEMORY_WORDS:
+        return HumanDecision("memories")
 
     return HumanDecision("revise", text)

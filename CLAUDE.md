@@ -136,6 +136,18 @@ empty → revision feedback. Two rules matter and are pinned by `tests/test_hitl
 `main.py` echoes `decision.describe()` before resuming, so the fallthrough to revision feedback is visible at
 the moment of decision. New human-facing commands go in `hitl.py` plus the dispatch in `nodes.py`, not the CLI.
 
+**Draft export** (`export.py`) — `write_draft()` writes `drafts/<slug>-<timestamp>.md` and returns the path.
+Called from `human_approval_node` on the `approve` branch (the graph ends there, so it is the last chance to
+put the thesis somewhere reachable) and on the `export` command, which snapshots and returns to the gate. The
+path lands in `ThesisState.draft_path`, which the CLI prints at the gate and after the graph finishes.
+`_export_draft()` in `nodes.py` never raises: a failed write reports into `review_feedback` rather than
+losing an approval the operator already gave.
+
+`export.py` imports only stdlib, like `sandbox.py` and `hitl.py`. Note `out_dir` defaults to `None`, not to
+`DEFAULT_OUTPUT_DIR` — Python binds default arguments once at definition, so the constant would be
+impossible to override and tests would silently write into the real `drafts/`. That bug was written, caught
+by `tests/test_export.py`, and fixed; don't reintroduce it.
+
 **Tools** (`tools.py`, bound only to the research agent via `get_model_with_tools()`): `search_thesis_literature`
 (pgvector RAG — its own docstring tells the model to prefer this over `web_search`), `web_search`
 (DuckDuckGo), `file_reader` (txt/md/py/json/pdf), `code_generator` (structured-output Python generation),

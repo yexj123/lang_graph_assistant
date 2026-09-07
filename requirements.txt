@@ -15,3 +15,12 @@ pypdf==6.14.2
 pytest==9.1.1
 python-dotenv==1.2.2
 typing_extensions==4.16.0
+
+# Optional, feature-gated. Nothing in the core path imports these; each is loaded lazily
+# and raises an actionable message naming the install command if it is missing.
+#   Claude models (LLM_MODEL=claude-*). DeepSeek needs nothing extra - it is served over
+#   an OpenAI-compatible API, so ChatOpenAI with a base_url is the whole integration.
+# langchain-anthropic==1.4.0
+#   DOCX export (--format docx). PDF export uses an external pandoc or pdflatex instead of
+#   a Python renderer, which on a thesis-length document would do a markedly worse job.
+# python-docx==1.2.0

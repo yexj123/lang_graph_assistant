@@ -12,6 +12,9 @@ __pycache__/
 .env
 .claude/settings.local.json
 
+# Exported drafts - your thesis, not repo content
+drafts/
+
 # User-supplied corpus (large, not redistributable)
 papers/*.pdf
 !papers/.gitkeep

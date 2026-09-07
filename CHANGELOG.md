@@ -8,7 +8,7 @@ a measured before/after, or a **mutation check** — the fix was reverted in a t
 the suite was confirmed to fail. A test that passes but cannot fail proves nothing, and several tests in this
 list were strengthened only after a mutation slipped past them.
 
-Test suite: **163 passing**, no database, no API calls, no billing. 32 further tests are opt-in
+Test suite: **299 passing**, no database, no API calls, no billing. 32 further tests are opt-in
 (`-m deepeval`, `-m baseline`) because they need a live index and make billed calls.
 
 ---
@@ -219,6 +219,74 @@ fix relied on it.
 
 ---
 
+### 9. Features added after the review
+
+Ten gaps found by surveying the code after the remediation, plus multi-provider support.
+All are covered by the same standard as the fixes above: tests, and a mutation check where
+the behaviour is non-obvious.
+
+**Multi-provider models.** `providers.py` is a pure registry mapping model ids to
+providers; `config._build_chat_model()` is the only code that knows client classes. Set
+`LLM_MODEL=claude-sonnet-5` or `deepseek-chat` and the provider is inferred from the
+prefix, with `LLM_PROVIDER` to override. DeepSeek costs no dependency — it serves an
+OpenAI-compatible API, so `ChatOpenAI` plus a `base_url` is the whole integration.
+Anthropic needs `langchain-anthropic`, imported lazily and raising a message naming the
+install command. Embeddings deliberately stay on OpenAI: the pgvector collection is tied
+to one embedding model's dimensionality.
+
+**Durable memory can be inspected and pruned** (`memories`, `forget: <n>`). It was
+write-only: `remember:` added constraints that steer every generation and nothing could
+list or remove one, so a careless rule was permanent short of psql.
+
+**Live progress** — `graph.stream(stream_mode="updates")` prints each node as it
+completes. `invoke` returned only when a whole turn finished, so a multi-call research
+loop was minutes of silence indistinguishable from a hang.
+
+**Archived projects can be listed and restored** (`--list-projects`, `--restore-project`).
+`archive_active_proposal` had always written them; nothing ever read them back. Restoring
+archives the outgoing project rather than discarding it.
+
+**Bibliography** (`bibliography.py`) turns the draft's own `[source, p.N]` markers into a
+References section, resolved against `papers/manifest.json` for titles and arXiv ids, with
+BibTeX output. It deliberately ignores `[unsourced]`, `[ACADEMIC ISSUE]` and Markdown link
+text — a bibliography that invents entries is worse than none.
+
+**Web search returns URLs.** `DuckDuckGoSearchRun` returned prose with links stripped,
+while the research prompt instructed the agent to "mark anything from web_search with its
+URL" — asking for something the tool never supplied. `DuckDuckGoSearchResults` supplies it.
+
+**Token accounting** (`usage.py`) reports calls and tokens per turn and per model. Cost is
+opt-in via `<PROVIDER>_INPUT_PRICE`/`_OUTPUT_PRICE`: hardcoded rates drift and a stale
+number is worse than no number.
+
+**`--status`** prints the active thesis, thread, constraints, archived projects and
+configured models without entering the loop.
+
+**Export formats** (`render.py`): Markdown and LaTeX are pure transforms; DOCX uses
+`python-docx`; PDF delegates to pandoc or pdflatex. A bundled Python PDF renderer would
+mean hand-rolling pagination and hyphenation to produce something markedly worse, so the
+absence of a toolchain is an actionable error pointing at `tex`, not a bad PDF.
+
+**The proposal gate** (`proposal_approval_node`) puts the plan to the human *before* any
+research is billed. The draft gate came after every research call had been paid for, and
+for a thesis the plan is the expensive thing to get wrong.
+
+**Bounded context** (`context.py`) trims history with LangChain's `trim_messages` and
+condenses notes within a budget, announcing the drop rather than truncating silently. A
+naive slice would orphan a `ToolMessage` from the `AIMessage` that requested it, which
+every provider rejects.
+
+Three bugs were found by the new tests and fixed:
+
+- `export.write_draft` had `out_dir=DEFAULT_OUTPUT_DIR` as a **default argument**, bound
+  once at definition, so the constant could not be overridden — and the first test run
+  wrote into the real `drafts/` directory.
+- `session.archive_active_proposal` used a second-granular timestamp as its key. Restoring
+  archives the outgoing project immediately after reading the incoming one, so a
+  same-second collision overwrote a saved thesis and the subsequent delete destroyed it.
+- `render.escape_tex` substituted the backslash first, so the `{`/`}` rules mangled the
+  `	extbackslash{}` it had just produced into `	extbackslash\{\}`.
+
 ## Known limitations
 
 Deliberately not addressed. Recorded so they are choices rather than oversights.
@@ -230,11 +298,11 @@ Deliberately not addressed. Recorded so they are choices rather than oversights.
 - **`supervisor_router` routes on the raw query string alone** — no system prompt, no thesis state, no
   memory — and there is no "just answer" or "we're done" route, so *"what's my research question again?"*
   spins up the full research → write → review → approve machine and a billed draft.
-- **`messages` uses `operator.add`, not LangGraph's `add_messages` reducer**, and neither `messages` nor
-  `research_notes` is ever trimmed or summarised. In a system designed to loop, context grows monotonically.
 - **`DB_URI.replace("postgresql://", ...)`** mis-handles a `postgres://` scheme or an already-qualified DSN
   instead of failing loudly.
 - **`ThesisState.request_type`** is declared and initialised but read by nothing.
-- **`langchain-community` is deprecated** (`tools.py` emits a `DeprecationWarning`); `DuckDuckGoSearchRun`
-  needs migrating to its standalone package.
+- **`messages` still uses `operator.add` rather than LangGraph's `add_messages` reducer.** Growth is now
+  bounded at prompt-build time by `context.trim_history`, but the stored state still accumulates.
+- **`langchain-community` is deprecated** (`tools.py` emits a `DeprecationWarning`); the DuckDuckGo
+  tools need migrating to their standalone package.
 - **No evaluation scores are published**, per the reasoning in item 4.

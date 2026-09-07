@@ -3,9 +3,19 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.types import interrupt, Command
 from langgraph.graph import END
 from langgraph.store.base import BaseStore
-from memory import save_durable_memory, get_durable_memories, DurableMemoryItem
+from memory import (
+    DurableMemoryItem,
+    forget_durable_memory,
+    format_memory_listing,
+    get_durable_memories,
+    list_durable_memories,
+    save_durable_memory,
+)
 from session import PROPOSAL_NAMESPACE, PROPOSAL_KEY
 from hitl import parse_human_decision
+import export
+from export import write_draft
+from context import condense_notes, trim_history
 
 from config import get_model
 from state import ThesisState
@@ -14,8 +24,12 @@ from tools import get_model_with_tools
 
 # --- Routers ---
 def supervisor_router(state: ThesisState) -> str:
+    # .get, not ['user_query']: this now also runs from proposal_approval_node, and a
+    # KeyError inside a router aborts the whole turn rather than degrading.
     router_model = get_model().with_structured_output(SupervisorDecision)
-    decision = router_model.invoke(f"Route this user query to the best worker:\n{state['user_query']}")
+    decision = router_model.invoke(
+        f"Route this user query to the best worker:\n{state.get('user_query', '')}"
+    )
     return decision.next_step
 
 def research_router(state: ThesisState) -> Literal["tool_node", "write_node"]:
@@ -32,22 +46,32 @@ def proposal_node(state: ThesisState, store: BaseStore) -> dict:
     namespace, key = PROPOSAL_NAMESPACE, PROPOSAL_KEY
 
     saved_proposal = store.get(namespace, key)
-    if saved_proposal and not state.get("thesis_topic"):
+    if saved_proposal and not state.get("thesis_topic") and not state.get("proposal_feedback"):
         data = saved_proposal.value
         return {
             "thesis_initialized": True,
+            # A stored proposal was approved in an earlier session; don't re-gate it.
+            "proposal_approved": True,
             "thesis_topic": data["thesis_topic"],
             "research_question": data["research_question"],
             "outline": data["outline"],
         }
 
     proposal_model = get_model().with_structured_output(ThesisProposal)
+
+    revision = ""
+    if state.get("proposal_feedback"):
+        revision = "\n\nThe human rejected the previous proposal. Address this feedback:\n" + "\n".join(
+            f"- {f}" for f in state["proposal_feedback"]
+        )
+
     system_prompt = (
         "You are an academic thesis advisor.\n\n"
         "Based on the user's initial thesis idea, formulate:\n"
         "1. A clear and academically appropriate thesis topic.\n"
         "2. A concrete primary research question.\n"
         "3. A logical sequential thesis outline."
+        + revision
     )
 
     proposal: ThesisProposal = proposal_model.invoke(
@@ -66,11 +90,60 @@ def proposal_node(state: ThesisState, store: BaseStore) -> dict:
 
     return {
         "thesis_initialized": True,
+        "proposal_approved": False,
+        "proposal_feedback": [],
         "thesis_topic": proposal.thesis_topic,
         "research_question": proposal.research_question,
         "outline": proposal.outline,
         "review_feedback": [],
     }
+
+def proposal_approval_node(
+    state: ThesisState, store: BaseStore
+) -> Command[Literal["proposal_node", "proposal_approval_node", "research_node", "write_node"]]:
+    """Put the plan to the human before any research is paid for.
+
+    The draft gate came far too late in the process: proposal_node invented the topic,
+    question and outline and routed straight into research, so the first time anyone saw
+    the plan was bundled inside a finished draft - after every research call had been
+    billed. For a thesis, the plan is the expensive thing to get wrong.
+
+    Approving here routes onward via supervisor_router; anything else regenerates the
+    proposal with the human's feedback attached.
+    """
+    if state.get("proposal_approved"):
+        return Command(goto=supervisor_router(state))
+
+    outline = state.get("outline", [])
+    decision = parse_human_decision(
+        interrupt(
+            {
+                "kind": "proposal",
+                "thesis_topic": state.get("thesis_topic", ""),
+                "research_question": state.get("research_question", ""),
+                "outline": outline,
+                "active_constraints": get_durable_memories(store),
+            }
+        )
+    )
+
+    if decision.action == "empty":
+        return Command(goto="proposal_approval_node")
+
+    if decision.action == "approve":
+        return Command(update={"proposal_approved": True}, goto=supervisor_router(state))
+
+    # Everything else is a rewrite instruction for the plan, not for a draft.
+    return Command(
+        update={
+            "proposal_approved": False,
+            "proposal_feedback": [decision.payload],
+            "thesis_initialized": False,
+            "thesis_topic": "",
+        },
+        goto="proposal_node",
+    )
+
 
 def research_node(state: ThesisState, store: BaseStore) -> dict:
     durable_context = get_durable_memories(store)
@@ -100,7 +173,8 @@ def research_node(state: ThesisState, store: BaseStore) -> dict:
         )
     )
 
-    prompt_messages = [system_prompt] + state.get("messages", [])
+    # Bounded: this history carries every prior tool result and full draft.
+    prompt_messages = [system_prompt] + trim_history(state.get("messages", []))
     response = get_model_with_tools().invoke(prompt_messages)
 
     notes_update = {}
@@ -128,7 +202,7 @@ def write_node(state: ThesisState, store: BaseStore) -> dict:
         f"CORE RESEARCH QUESTION: {state.get('research_question')}\n\n"
         f"MANDATORY OUTLINE:\n{outline_str}\n\n"
         f"ENFORCED DECISIONS, CONSTRAINTS & SUPERVISOR GUIDELINES:\n{durable_context}\n\n"
-        f"RESEARCH NOTES:\n" + "\n".join(f"- {note}" for note in state.get("research_notes", [])) + "\n\n"
+        f"RESEARCH NOTES:\n" + "\n".join(f"- {note}" for note in condense_notes(state.get("research_notes", []))) + "\n\n"
         "CITATIONS: cite every factual claim inline as [source, p.N], copying the marker from "
         "the research notes above. Never invent a citation or a page number - if a claim has no "
         "marker in the notes, either omit the claim or write it without one and expect the "
@@ -155,7 +229,7 @@ def reviewer_node(state: ThesisState) -> Command[Literal["research_node", "write
     # see the evidence the draft was built from. Without these notes it can only judge prose
     # against an outline, and any factual verdict it returns is unfounded.
     notes = state.get("research_notes", [])
-    notes_str = "\n".join(f"- {note}" for note in notes) if notes else "(none gathered yet)"
+    notes_str = "\n".join(f"- {note}" for note in condense_notes(notes)) if notes else "(none gathered yet)"
 
     system_prompt = (
         "You are a strict academic thesis reviewer.\n\n"
@@ -205,6 +279,26 @@ def reviewer_node(state: ThesisState) -> Command[Literal["research_node", "write
         goto="write_node",
     )
 
+def _export_draft(state: ThesisState, out_dir: str = "") -> dict:
+    """Best-effort write of the current draft to disk.
+
+    Returns a state update either way. A failed export must never lose an approval or
+    crash the gate - but it must not be silent either, so the failure goes into
+    review_feedback where the CLI prints it.
+    """
+    try:
+        path = write_draft(
+            state.get("draft", ""),
+            thesis_topic=state.get("thesis_topic", ""),
+            research_question=state.get("research_question", ""),
+            fmt=export.DEFAULT_FORMAT,
+            **({"out_dir": out_dir} if out_dir else {}),
+        )
+    except Exception as exc:  # noqa: BLE001 - reported, not swallowed
+        return {"review_feedback": [f"[EXPORT FAILED] {type(exc).__name__}: {exc}"]}
+    return {"draft_path": str(path)}
+
+
 def human_approval_node(state: ThesisState, store: BaseStore) -> Command[Literal["research_node", "write_node", "human_approval_node", "__end__"]]:
     payload = {
         "current_draft": state.get("draft", ""),
@@ -212,6 +306,7 @@ def human_approval_node(state: ThesisState, store: BaseStore) -> Command[Literal
         "review_feedback": state.get("review_feedback", []),
         "revision_count": state.get("revision_count", 0),
         "active_constraints": get_durable_memories(store),
+        "draft_path": state.get("draft_path", ""),
     }
 
     decision = parse_human_decision(interrupt(payload))
@@ -220,6 +315,31 @@ def human_approval_node(state: ThesisState, store: BaseStore) -> Command[Literal
     #    is what the old fallthrough did.
     if decision.action == "empty":
         return Command(goto="human_approval_node")
+
+    # 0b. Snapshot the draft to disk without deciding anything, then ask again. Lets you
+    #     keep a version before requesting changes that might make it worse.
+    if decision.action == "export":
+        return Command(update=_export_draft(state, decision.payload), goto="human_approval_node")
+
+    # 0c. Inspect and prune durable memory. Constraints steer every future generation, so
+    #     being unable to see or remove one was the sharpest edge left in the tool.
+    if decision.action == "memories":
+        listing = format_memory_listing(list_durable_memories(store))
+        return Command(update={"review_feedback": [listing]}, goto="human_approval_node")
+
+    if decision.action == "forget":
+        try:
+            index = int(decision.payload.strip())
+        except ValueError:
+            note = f"[FORGET FAILED] Expected a number from the `memories` listing, got {decision.payload!r}."
+        else:
+            removed = forget_durable_memory(store, index)
+            note = (
+                f"[CONSTRAINT REMOVED] {removed['title']}"
+                if removed
+                else f"[FORGET FAILED] No constraint numbered {index}. Run `memories` for the list."
+            )
+        return Command(update={"review_feedback": [note]}, goto="human_approval_node")
 
     # 1. Durable memory -> persist, then redraft under the new constraint.
     if decision.action == "remember":
@@ -245,7 +365,13 @@ def human_approval_node(state: ThesisState, store: BaseStore) -> Command[Literal
             status="accepted"
         )
         save_durable_memory(store, conclusion)
-        return Command(update={"review_status": "final_approved"}, goto=END)
+
+        # The graph ends here, so this is the last chance to put the thesis somewhere the
+        # operator can actually reach. Without it the finished draft survives only inside
+        # a Postgres checkpoint and in terminal scrollback.
+        update = {"review_status": "final_approved"}
+        update.update(_export_draft(state))
+        return Command(update=update, goto=END)
 
     # 3. Explicit Research Override (also save direction if user specified rejection)
     if decision.action == "research":

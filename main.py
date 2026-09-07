@@ -18,10 +18,13 @@ Action Commands:
   • 'research: <notes>' -> Request more research.
   • 'revise: <notes>'   -> Request writing revision.
   • 'remember: <rule>'  -> Save constraint/decision to long-term memory.
+  • 'export'            -> Write the current draft to drafts/, then ask again.
+  • 'memories'          -> List durable constraints, then ask again.
+  • 'forget: <n>'       -> Delete constraint <n> from that listing.
   • Any other text      -> Treated as revision feedback."""
 
 
-def run_cli(new_thread: bool = False, new_project: bool = False) -> None:
+def run_cli(new_thread: bool = False, new_project: bool = False, export_format: str = "md") -> None:
     # Deferred so that --help, and any import of this module, stay free of I/O.
     from langchain_core.messages import HumanMessage
     from langgraph.types import Command
@@ -29,6 +32,13 @@ def run_cli(new_thread: bool = False, new_project: bool = False) -> None:
     from config import get_pool, get_store, init_db, startup_error_message
     from graph import build_graph
     from session import archive_active_proposal, resolve_thread_id
+    from usage import Usage
+
+    import config as _config
+    import export as _export
+
+    usage = Usage()
+    _export.DEFAULT_FORMAT = export_format
 
     print("=== Academic Research & Writing Assistant Initialized ===")
     print("Type 'exit' or 'quit' to end the session.\n")
@@ -70,7 +80,7 @@ def run_cli(new_thread: bool = False, new_project: bool = False) -> None:
             if snapshot.next:
                 print("This session stopped at the approval gate. Picking it up there.\n")
                 try:
-                    _service_interrupts(graph, config, Command)
+                    _service_interrupts(graph, config, Command, usage)
                 except KeyboardInterrupt:
                     print("\n[interrupted] Approval abandoned; the gate is still pending.")
                 except Exception as exc:  # noqa: BLE001
@@ -103,8 +113,11 @@ def run_cli(new_thread: bool = False, new_project: bool = False) -> None:
                     "thesis_topic": "",
                     "research_question": "",
                     "outline": [],
+                    "proposal_approved": False,
+                    "proposal_feedback": [],
                     "research_notes": [],
                     "draft": "",
+                    "draft_path": "",
                     "request_type": "",
                     "review_status": "",
                     "review_feedback": [],
@@ -119,7 +132,8 @@ def run_cli(new_thread: bool = False, new_project: bool = False) -> None:
                 }
 
             try:
-                _run_turn(graph, config, input_state, Command)
+                _run_turn(graph, config, input_state, Command, usage)
+                print(f"  [usage] {usage.summary(_config.MODEL_PROVIDER.name)}")
             except KeyboardInterrupt:
                 print("\n[interrupted] Turn abandoned. The thread is checkpointed, nothing is lost.")
             except Exception as exc:  # noqa: BLE001 - a bad turn must not end the session
@@ -127,17 +141,71 @@ def run_cli(new_thread: bool = False, new_project: bool = False) -> None:
                 print("The thread is checkpointed, so your work is intact. Try again or rephrase.")
 
 
-def _run_turn(graph, config: dict, input_state: dict, Command) -> None:
+class _NullUsage:
+    """Stand-in when a caller has no session usage tracker (e.g. resuming at startup)."""
+
+    def record(self, *_args, **_kwargs) -> None:
+        return None
+
+
+_NODE_LABELS = {
+    "proposal_node": "drafting a thesis proposal",
+    "proposal_approval_node": "waiting for your approval of the plan",
+    "research_node": "researching",
+    "tool_node": "running a tool",
+    "write_node": "writing the draft",
+    "reviewer_node": "reviewing the draft",
+    "human_approval_node": "waiting for your approval of the draft",
+}
+
+
+def _stream(graph, payload, config: dict, usage) -> None:
+    """Run the graph, printing each node as it completes.
+
+    `invoke` returns only when the whole turn finishes, which for a research loop means
+    minutes of silence while billed calls run - indistinguishable from a hang. `stream`
+    with stream_mode="updates" yields one item per completed node, which is also where
+    token usage can be harvested from the messages each node returns.
+    """
+    for update in graph.stream(payload, config=config, stream_mode="updates"):
+        for node_name, node_state in (update or {}).items():
+            label = _NODE_LABELS.get(node_name, node_name)
+            print(f"  ... {label}")
+            for message in (node_state or {}).get("messages", []) or []:
+                usage.record(message)
+
+
+def _run_turn(graph, config: dict, input_state: dict, Command, usage) -> None:
     """Run one graph invocation, then service any human-approval interrupts it raises."""
-    graph.invoke(input_state, config=config)
-    _service_interrupts(graph, config, Command)
+    _stream(graph, input_state, config, usage)
+    _service_interrupts(graph, config, Command, usage)
 
 
-def _service_interrupts(graph, config: dict, Command) -> None:
-    """Drive the human-approval gate until the graph stops asking.
+def _render_proposal_gate(payload: dict) -> None:
+    """The plan gate. Shown before any research is billed."""
+    print("\n" + "=" * 60)
+    print("                  THESIS PLAN APPROVAL")
+    print("=" * 60)
+    print(f"Topic            : {payload.get('thesis_topic', '')}")
+    print(f"Research question: {payload.get('research_question', '')}")
+    print("\nOutline:")
+    for index, section in enumerate(payload.get("outline", []), 1):
+        print(f"  {index}. {section}")
 
-    Split out from _run_turn because a thread can already be sitting at the gate when
-    the CLI starts, and that has to be handled before prompting for anything new.
+    constraints = payload.get("active_constraints")
+    if constraints and constraints != "No durable decisions recorded yet.":
+        print("\nActive Long-Term Constraints:")
+        print(constraints)
+
+    print("\nApprove to begin research, or describe what to change about the plan.")
+    print("Nothing has been researched or billed yet.")
+
+
+def _service_interrupts(graph, config: dict, Command, usage=None) -> None:
+    """Drive the approval gates until the graph stops asking.
+
+    Split out from _run_turn because a thread can already be sitting at a gate when the
+    CLI starts, and that has to be handled before prompting for anything new.
     """
     state_snapshot = graph.get_state(config)
     while state_snapshot.next:
@@ -149,6 +217,15 @@ def _service_interrupts(graph, config: dict, Command) -> None:
             return
 
         payload = interrupts[0].value
+
+        # Two different gates share this loop; they ask for different things.
+        if isinstance(payload, dict) and payload.get("kind") == "proposal":
+            _render_proposal_gate(payload)
+            user_action = input("\nYour decision: ").strip()
+            print(f"  -> {parse_human_decision(user_action).describe()}")
+            _stream(graph, Command(resume=user_action), config, usage or _NullUsage())
+            state_snapshot = graph.get_state(config)
+            continue
 
         print("\n" + "=" * 60)
         print("                  HUMAN APPROVAL GATE")
@@ -166,6 +243,10 @@ def _service_interrupts(graph, config: dict, Command) -> None:
             print("\nActive Long-Term Constraints:")
             print(active_constraints)
 
+        exported = payload.get("draft_path")
+        if exported:
+            print(f"\nLast exported to: {exported}")
+
         print("\nCurrent Generated Draft:")
         print("-" * 60)
         print(payload.get("current_draft", "No draft content available."))
@@ -179,8 +260,105 @@ def _service_interrupts(graph, config: dict, Command) -> None:
         # "approve." which missed the old exact-match set and triggered a full rewrite.
         print(f"  -> {parse_human_decision(user_action).describe()}")
 
-        graph.invoke(Command(resume=user_action), config=config)
+        _stream(graph, Command(resume=user_action), config, usage or _NullUsage())
         state_snapshot = graph.get_state(config)
+
+    # The graph has finished. Say where the thesis ended up - this is the only moment the
+    # operator learns the run produced a file at all.
+    final_path = graph.get_state(config).values.get("draft_path")
+    if final_path:
+        print(f"\nDraft written to: {final_path}")
+
+
+def _with_store(action) -> int:
+    """Run a one-shot command that needs the store, with the same startup diagnostics."""
+    from config import get_pool, get_store, init_db, startup_error_message
+
+    try:
+        init_db()
+        store = get_store()
+        pool = get_pool()
+    except Exception as exc:  # noqa: BLE001
+        print(startup_error_message(exc))
+        return 1
+
+    with pool:
+        return action(store)
+
+
+def print_status() -> int:
+    """Everything about the current project, without entering the interactive loop."""
+    import config
+    import providers
+    from memory import count_durable_memories, format_memory_listing, list_durable_memories
+    from session import PROPOSAL_KEY, PROPOSAL_NAMESPACE, list_archived_proposals, resolve_thread_id
+
+    print("Models")
+    print(f"  chat  : {config.MODEL_NAME}  (provider: {config.MODEL_PROVIDER.name}, "
+          f"key {config.MODEL_PROVIDER.api_key_env})")
+    print(f"  judge : {config.JUDGE_MODEL_NAME}  (provider: {config.JUDGE_PROVIDER.name})")
+    print(f"  embed : {config.EMBEDDING_MODEL_NAME}  (always OpenAI)")
+    print(f"\nAvailable providers:\n{providers.describe_available()}")
+    print(f"\nDatabase\n  {config.DB_URI}")
+
+    def report(store) -> int:
+        thread_id, resumed = resolve_thread_id(store)
+        proposal = store.get(PROPOSAL_NAMESPACE, PROPOSAL_KEY)
+        print(f"\nThread\n  {thread_id} ({'resumed' if resumed else 'new'})")
+
+        print("\nActive thesis")
+        if proposal:
+            print(f"  topic   : {proposal.value.get('thesis_topic', '')}")
+            print(f"  question: {proposal.value.get('research_question', '')}")
+            for i, section in enumerate(proposal.value.get("outline", []), 1):
+                print(f"    {i}. {section}")
+        else:
+            print("  (none - your next query will propose one)")
+
+        archived = list_archived_proposals(store)
+        if archived:
+            print(f"\nArchived projects ({len(archived)}) - restore with --restore-project <key>")
+            for item in archived:
+                print(f"  {item['key']}  {item.get('thesis_topic', '')}")
+
+        print(f"\nDurable constraints ({count_durable_memories(store)})")
+        print(format_memory_listing(list_durable_memories(store)))
+        return 0
+
+    return _with_store(report)
+
+
+def print_projects() -> int:
+    from session import list_archived_proposals
+
+    def report(store) -> int:
+        archived = list_archived_proposals(store)
+        if not archived:
+            print("No archived projects. `--new-project` archives the active one.")
+            return 0
+        print(f"{len(archived)} archived project(s):")
+        for item in archived:
+            print(f"  {item['key']}")
+            print(f"    topic   : {item.get('thesis_topic', '')}")
+            print(f"    question: {item.get('research_question', '')}")
+        return 0
+
+    return _with_store(report)
+
+
+def restore_project(archive_key: str) -> int:
+    from session import restore_archived_proposal
+
+    def action(store) -> int:
+        restored = restore_archived_proposal(store, archive_key)
+        if restored is None:
+            print(f"No archived project named {archive_key!r}. Run --list-projects to see them.")
+            return 1
+        print(f"Restored: {restored.get('thesis_topic', '')}")
+        print("The previously active proposal was archived in its place.")
+        return 0
+
+    return _with_store(action)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -205,9 +383,43 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Start a new thesis: archives the current proposal and proposes a new one.",
     )
+    parser.add_argument(
+        "--status",
+        action="store_true",
+        help="Print the active thesis, thread, constraints and models, then exit.",
+    )
+    parser.add_argument(
+        "--list-projects",
+        dest="list_projects",
+        action="store_true",
+        help="List archived thesis proposals and exit.",
+    )
+    parser.add_argument(
+        "--restore-project",
+        dest="restore_project",
+        metavar="KEY",
+        help="Make an archived proposal active again (archives the current one first).",
+    )
+    parser.add_argument(
+        "--format",
+        dest="export_format",
+        default="md",
+        choices=("md", "tex", "docx", "pdf"),
+        help="Format for exported drafts (default: md).",
+    )
     return parser
 
 
 if __name__ == "__main__":
     args = build_arg_parser().parse_args()
-    run_cli(new_thread=args.new_thread, new_project=args.new_project)
+    if args.status:
+        raise SystemExit(print_status())
+    if args.list_projects:
+        raise SystemExit(print_projects())
+    if args.restore_project:
+        raise SystemExit(restore_project(args.restore_project))
+    run_cli(
+        new_thread=args.new_thread,
+        new_project=args.new_project,
+        export_format=args.export_format,
+    )

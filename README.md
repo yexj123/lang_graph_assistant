@@ -28,7 +28,16 @@ across sessions.
   that does *not* cover.
 - **Long-term memory** — durable decisions, constraints, and research conclusions persist across sessions in
   Postgres and are injected into every future prompt.
-- **Human-in-the-loop** — every draft is gated behind an explicit approval step before the graph finishes.
+- **Human-in-the-loop** — *two* gates. The **plan** is approved before any research is billed, and the
+  **draft** before the graph finishes. Constraints can be listed and deleted from the gate.
+- **Any of three providers** — OpenAI, Anthropic or DeepSeek, chosen per model id. Set
+  `LLM_MODEL=claude-sonnet-5` and the provider is inferred; no code changes.
+- **Live progress and token accounting** — each node prints as it completes, and every turn reports
+  calls and tokens (cost too, if you supply prices).
+- **Draft export with a bibliography** — approving writes the thesis to
+  `drafts/<topic-slug>-<timestamp>.<ext>` in Markdown, LaTeX, DOCX or PDF, with a References section
+  built from the draft's own `[source, p.N]` markers and resolved against `papers/manifest.json`.
+  `export` at the gate snapshots a version at any point; timestamped, so nothing is overwritten.
 - **Session resumability** — the CLI picks up your last conversation automatically, and resumes it *at the
   approval gate* if that is where it stopped.
 
@@ -37,6 +46,36 @@ across sessions.
 The thesis proposal outlives conversation threads, so a new thread continues the same thesis. Use
 `--new-thread` for a fresh conversation about your current thesis, and `--new-project` to start a different
 one — that archives the existing proposal under a timestamped key rather than deleting it.
+
+## Models
+
+Pick a chat model with `LLM_MODEL`; the provider is inferred from the id. `LLM_PROVIDER`
+overrides that inference for a model the registry has not seen yet.
+
+| Provider | Set | Example models | Extra install |
+|---|---|---|---|
+| OpenAI | `OPENAI_API_KEY` | `gpt-4o`, `gpt-4o-mini`, `gpt-4.1` | none |
+| Anthropic | `ANTHROPIC_API_KEY` | `claude-opus-5`, `claude-sonnet-5`, `claude-haiku-4-5-20251001` | `pip install langchain-anthropic` |
+| DeepSeek | `DEEPSEEK_API_KEY` | `deepseek-chat`, `deepseek-reasoner` | none — OpenAI-compatible API |
+
+```bash
+LLM_MODEL=claude-sonnet-5 python main.py     # Claude
+LLM_MODEL=deepseek-chat   python main.py     # DeepSeek
+LLM_PROVIDER=anthropic    python main.py     # that provider's default model
+python main.py --status                      # what is actually configured
+```
+
+Embeddings stay on OpenAI regardless: the pgvector collection is built with a specific
+embedding model and its dimensionality, so switching chat providers must not silently
+invalidate the index.
+
+The evaluation judge is separate (`JUDGE_MODEL`) and the eval **fails** if it equals the
+generator. A *different provider* is the strongest form of judge independence available —
+`JUDGE_MODEL=claude-sonnet-5` while drafting with `gpt-4o`, say.
+
+Optionally set `<PROVIDER>_INPUT_PRICE` / `<PROVIDER>_OUTPUT_PRICE` (USD per million
+tokens) to turn the per-turn token count into a cost estimate. Prices are not hardcoded
+because they drift, and a stale number is worse than none.
 
 ## Security note
 
@@ -67,7 +106,7 @@ isolation would mean a container, `nsjail`/`firejail`, or a network namespace wi
 2. Create a `.env` file in the repo root:
    ```
    OPENAI_API_KEY=sk-...
-   OPENAI_MODEL=gpt-4o          # optional, this is the default
+   LLM_MODEL=gpt-4o             # optional; also accepts claude-*/deepseek-* (see Models below)
    DATABASE_URL=postgresql://postgres:postgres@localhost:5432/thesis_db   # optional, this is the default
    ```
 3. Make sure the Postgres instance in `DATABASE_URL` is reachable. Checkpointing, long-term memory, and
@@ -92,6 +131,11 @@ python ingest.py --rebuild    # drop the collection first, after removing or ren
 pytest tests/ -v              # fast unit suite - no database, no API calls, no billing
 pytest -m deepeval            # RAG quality eval - needs Postgres, an OpenAI key and an ingested corpus
 pytest -m baseline            # the no-retrieval comparison arm
+
+python main.py --status               # active thesis, thread, constraints, models
+python main.py --list-projects        # archived theses
+python main.py --restore-project KEY  # make an archived thesis active again
+python main.py --format docx          # export approved drafts as .docx (also tex, pdf)
 ```
 
 ## Evaluation
@@ -128,6 +172,9 @@ a draft is ready for review, you'll be dropped into an approval gate:
 | `research: <notes>` | Send it back for more research |
 | `revise: <notes>` | Send it back for a writing revision |
 | `remember: <rule>` | Save a durable decision/constraint for all future sessions |
+| `export` / `save` | Write the current draft to `drafts/` and ask again (`export: <dir>` for a custom path) |
+| `memories` | List every durable constraint, numbered, and ask again |
+| `forget: <n>` | Delete constraint `<n>` from that listing |
 | *(empty)* | Re-asks. Nothing is spent on a rewrite instructed by nothing |
 | anything else | Treated as revision feedback |
 
@@ -140,6 +187,10 @@ you type, the CLI prints how it read it before acting, so an interpretation is n
 
 See [`CLAUDE.md`](./CLAUDE.md) for the full architecture: graph shape, the two persistence layers, the
 structured-output routing pattern, and known rough edges.
+
+[`DEVELOPER_GUIDE.md`](./DEVELOPER_GUIDE.md) is the orientation for changing the code: what each module is
+responsible for, how control and data flow between them, the public functions with worked examples, and how
+the test suite is organised and extended.
 
 [`CHANGELOG.md`](./CHANGELOG.md) records the defects found in a hiring-bar review of this repo, how each was
 fixed, and how each fix was verified — including a **Known limitations** section listing what was

@@ -12,10 +12,13 @@ class ThesisState(TypedDict):
     thesis_topic: str
     research_question: str
     outline: list[str]
+    proposal_approved: bool   # gated by proposal_approval_node before research spends anything
+    proposal_feedback: list[str]
 
     # Workspace artifacts
     research_notes: Annotated[list[str], operator.add]
     draft: str
+    draft_path: str          # filesystem path of the last export, "" if never exported
 
     # Review loop & HITL
     request_type: str

@@ -1,7 +1,7 @@
 from pathlib import Path
 from pypdf import PdfReader
 from langchain_core.tools import tool
-from langchain_community.tools import DuckDuckGoSearchRun
+from langchain_community.tools import DuckDuckGoSearchResults
 from langchain_core.messages import SystemMessage, HumanMessage
 from functools import lru_cache
 
@@ -44,13 +44,33 @@ def search_thesis_literature(query: str, k: int = 4) -> str:
         return f"Literature retrieval failed: {e}"
     
 @tool
-def web_search(query: str) -> str:
-    """Searches the web for up-to-date information, papers, or documentation."""
+def web_search(query: str, max_results: int = 5) -> str:
+    """Searches the web for up-to-date information, papers, or documentation.
+    Each result carries its URL as a SOURCE marker - carry that URL into your notes the
+    same way you carry [filename, p.N] markers, so web-sourced claims can be cited too.
+    """
     try:
-        search = DuckDuckGoSearchRun()
-        return search.invoke(query)
+        # Results, not Run: DuckDuckGoSearchRun returns a prose blob with the links
+        # stripped out, so the research prompt's instruction to "mark anything from
+        # web_search with its URL" was asking for something the tool never supplied.
+        search = DuckDuckGoSearchResults(output_format="list", num_results=max_results)
+        results = search.invoke(query)
     except Exception as e:
         return f"Search error: {e}"
+
+    if not results:
+        return "No web results found."
+
+    if isinstance(results, str):  # older versions ignore output_format
+        return results
+
+    formatted = []
+    for i, item in enumerate(results, 1):
+        link = item.get("link") or item.get("url") or "no-url"
+        title = item.get("title", "")
+        snippet = item.get("snippet", "")
+        formatted.append(f"[{i}] SOURCE: {link}\n{title}\n{snippet}".strip())
+    return "\n\n".join(formatted)
 
 @tool
 def file_reader(file_path: str) -> str:

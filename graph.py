@@ -5,6 +5,7 @@ from state import ThesisState
 from tools import tools
 from nodes import (
     proposal_node,
+    proposal_approval_node,
     research_node,
     write_node,
     reviewer_node,
@@ -26,6 +27,7 @@ def build_graph():
 
     # Register Nodes
     builder.add_node("proposal_node", proposal_node)
+    builder.add_node("proposal_approval_node", proposal_approval_node)
     builder.add_node("research_node", research_node)
     builder.add_node("tool_node", ToolNode(tools))
     builder.add_node("write_node", write_node)
@@ -35,11 +37,10 @@ def build_graph():
     # Connect Edges
     builder.add_edge(START, "proposal_node")
 
-    builder.add_conditional_edges(
-        "proposal_node",
-        supervisor_router,
-        {"research_node": "research_node", "write_node": "write_node"}
-    )
+    # The plan is gated before any research is billed. proposal_approval_node calls
+    # supervisor_router itself and routes with Command(goto=...), so there is no
+    # conditional edge here - mixing the two from one node fights the framework.
+    builder.add_edge("proposal_node", "proposal_approval_node")
 
     builder.add_conditional_edges(
         "research_node",
@@ -50,6 +51,6 @@ def build_graph():
     builder.add_edge("tool_node", "research_node")
     builder.add_edge("write_node", "reviewer_node")
 
-    # reviewer_node and human_approval_node use Command(goto=...)
+    # proposal_approval_node, reviewer_node and human_approval_node use Command(goto=...)
 
     return builder.compile(checkpointer=get_checkpointer(), store=get_store())

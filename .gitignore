@@ -1,0 +1,23 @@
+# Byte-compiled
+__pycache__/
+*.py[cod]
+
+# Test & eval tooling caches
+.pytest_cache/
+.deepeval/
+.deepeval-cache.json
+.deepeval_telemetry.txt
+
+# Secrets and machine-local config
+.env
+.claude/settings.local.json
+
+# User-supplied corpus (large, not redistributable)
+papers/*.pdf
+!papers/.gitkeep
+
+# Environments and editors
+.venv/
+venv/
+.idea/
+.vscode/

@@ -1,0 +1,17 @@
+[tool.pytest.ini_options]
+# The repo is a flat set of top-level modules, not an installed package. Without
+# this, `pytest tests/` puts only tests/ on sys.path and every `from config import ...`
+# / `from sandbox import ...` fails at collection. `python -m pytest` happened to work
+# because it adds the CWD; this makes the documented command work the same way.
+pythonpath = ["."]
+testpaths = ["tests"]
+
+# List form, not a string: pytest splits a string addopts with shlex, and nested
+# quoting differs across shells on Windows.
+# Both arms of the RAG eval are opt-in: they need a live DB and make billed calls.
+addopts = ["-m", "not deepeval and not baseline"]
+
+markers = [
+    "deepeval: RAG quality evaluation against the sourced golden set. Requires a live Postgres, an OpenAI key and an ingested papers/ corpus, and makes billed API calls. Deselected by default; run with `pytest -m deepeval`.",
+    "baseline: the no-retrieval comparison arm. Measures rather than gates, so it is reported alongside the deepeval arm to show what retrieval is actually contributing. Run with `pytest -m baseline`.",
+]

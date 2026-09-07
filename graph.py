@@ -12,12 +12,16 @@ from nodes import (
     supervisor_router,
     research_router,
 )
-from config import checkpointer, store, init_db
+from config import get_checkpointer, get_store
+
 
 def build_graph():
-    # Run migrations
-    init_db()
+    """Compile the thesis graph.
 
+    Assumes the tables already exist: run config.init_db() once before calling this.
+    Migration is a separate responsibility and used to run here as an import-time side
+    effect, which meant importing this module required a live database.
+    """
     builder = StateGraph(ThesisState)
 
     # Register Nodes
@@ -48,6 +52,4 @@ def build_graph():
 
     # reviewer_node and human_approval_node use Command(goto=...)
 
-    return builder.compile(checkpointer=checkpointer, store=store)
-
-graph = build_graph()
+    return builder.compile(checkpointer=get_checkpointer(), store=get_store())

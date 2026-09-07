@@ -1,0 +1,14 @@
+# Normalise line endings in the repository regardless of each contributor's local
+# core.autocrlf setting. Without this, whether a file lands in git with CRLF depends on
+# the machine that committed it - this repo is authored on Windows (autocrlf=true) and
+# would be cloned on Linux, so leaving it to config invites spurious whole-file diffs.
+* text=auto
+
+# Binary payloads git must never touch. papers/*.pdf is gitignored, but fetch_papers.py
+# writes there and a stray `git add -f` must not corrupt a checksum-verified download.
+*.pdf binary
+
+# Read as text but keep LF: JSON manifests and golden sets are compared byte-for-byte by
+# tests, and shell scripts must stay LF to remain runnable on POSIX.
+*.json text eol=lf
+*.sh text eol=lf

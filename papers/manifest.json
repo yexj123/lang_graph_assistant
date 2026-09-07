@@ -1,0 +1,40 @@
+{
+  "papers": [
+    {
+      "arxiv_id": "1706.03762",
+      "filename": "attention-is-all-you-need.pdf",
+      "title": "Attention Is All You Need",
+      "sha256": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697"
+    },
+    {
+      "arxiv_id": "1810.04805",
+      "filename": "bert.pdf",
+      "title": "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding",
+      "sha256": "5692a5514787a8c6727b4ff3b726a3385798bc68e12138d1d4af83947e2acf6e"
+    },
+    {
+      "arxiv_id": "1907.11692",
+      "filename": "roberta.pdf",
+      "title": "RoBERTa: A Robustly Optimized BERT Pretraining Approach",
+      "sha256": "76a3872d244793563a5b000b818cbaf0ca8972ab1145d32be474c05b2a8f3070"
+    },
+    {
+      "arxiv_id": "2005.14165",
+      "filename": "gpt3-few-shot-learners.pdf",
+      "title": "Language Models are Few-Shot Learners",
+      "sha256": "97fd272f1fdfc18677462d0292f5fbf26ca86b4d1b485c2dba03269b643a0e83"
+    },
+    {
+      "arxiv_id": "2005.11401",
+      "filename": "rag.pdf",
+      "title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
+      "sha256": "23e3249e9a1e75418d82efecab0ea8c4d033b89c93742f63208d47ce01f21233"
+    },
+    {
+      "arxiv_id": "2004.04906",
+      "filename": "dense-passage-retrieval.pdf",
+      "title": "Dense Passage Retrieval for Open-Domain Question Answering",
+      "sha256": "3e67fc1a9977715acf722d85f0b7d124b03715e975f6310a4d6c12094190912f"
+    }
+  ]
+}

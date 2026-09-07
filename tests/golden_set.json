@@ -1,0 +1,118 @@
+{
+  "_comment": "Golden Q&A for the RAG evaluation. Every reference answer is grounded in a passage that exists in the corpus defined by papers/manifest.json, recorded here as source + page + source_quote so a reader can verify the ground truth rather than trust it. Pages are 1-indexed, matching the citations format_citation() produces. tests/test_golden_set.py checks each quote against the actual PDF text.",
+  "corpus_manifest": "papers/manifest.json",
+  "goldens": [
+    {
+      "question": "How does scaled dot-product attention scale the dot products before the softmax, and why?",
+      "reference": "It computes the dot products of the query with all keys and divides each by the square root of dk, the dimension of the keys, before applying a softmax to obtain the weights on the values.",
+      "source": "attention-is-all-you-need.pdf",
+      "page": 4,
+      "source_quote": "We compute the dot products of the query with all keys, divide each by"
+    },
+    {
+      "question": "How many layers are in the Transformer encoder stack and what output dimension do its sub-layers produce?",
+      "reference": "The encoder is a stack of N = 6 identical layers, and all sub-layers as well as the embedding layers produce outputs of dimension d_model = 512.",
+      "source": "attention-is-all-you-need.pdf",
+      "page": 3,
+      "source_quote": "The encoder is composed of a stack of N = 6 identical layers"
+    },
+    {
+      "question": "How many attention heads does the original Transformer use, and what is the dimension of each head?",
+      "reference": "It employs h = 8 parallel attention layers (heads), with dk = dv = d_model/h = 64, so the total computational cost is similar to single-head attention with full dimensionality.",
+      "source": "attention-is-all-you-need.pdf",
+      "page": 5,
+      "source_quote": "we employ h = 8 parallel attention layers, or heads"
+    },
+    {
+      "question": "Why does the Transformer need positional encodings at all?",
+      "reference": "Because the model contains no recurrence and no convolution, information about the relative or absolute position of tokens must be injected explicitly for the model to make use of sequence order.",
+      "source": "attention-is-all-you-need.pdf",
+      "page": 6,
+      "source_quote": "Since our model contains no recurrence and no convolution"
+    },
+    {
+      "question": "What fraction of tokens does BERT mask during pre-training, and what does it predict?",
+      "reference": "BERT masks 15% of all WordPiece tokens in each sequence at random and predicts only the masked words, rather than reconstructing the entire input as a denoising auto-encoder would.",
+      "source": "bert.pdf",
+      "page": 4,
+      "source_quote": "we mask 15% of all WordPiece to"
+    },
+    {
+      "question": "What are the layer count, hidden size, head count and parameter count of BERT-base and BERT-large?",
+      "reference": "BERT-base uses L=12 layers, H=768 hidden size, A=12 attention heads and 110M parameters; BERT-large uses L=24, H=1024, A=16 and 340M parameters.",
+      "source": "bert.pdf",
+      "page": 3,
+      "source_quote": "Total Param- eters=110M"
+    },
+    {
+      "question": "What did the BERT authors find when they pre-trained without the next sentence prediction task?",
+      "reference": "They ran an ablation pre-trained without the NSP task and examined the impact of removing it, isolating NSP's contribution to downstream performance.",
+      "source": "bert.pdf",
+      "page": 8,
+      "source_quote": "this model was pre-trained without the NSP task"
+    },
+    {
+      "question": "What is the difference between static and dynamic masking, and which does RoBERTa adopt?",
+      "reference": "The original BERT implementation masked once during data preprocessing, producing a single static mask reused every epoch. RoBERTa avoids reusing the same mask by generating the masking pattern dynamically, and compares this dynamic masking against the static approach.",
+      "source": "roberta.pdf",
+      "page": 4,
+      "source_quote": "performed masking once during data preprocessing, resulting in a sin"
+    },
+    {
+      "question": "How much text was RoBERTa trained on, and how does that compare to BERT's original data?",
+      "reference": "RoBERTa uses five English-language corpora totalling over 160GB of uncompressed text, compared with the 16GB BookCorpus plus English Wikipedia used to train the original BERT.",
+      "source": "roberta.pdf",
+      "page": 3,
+      "source_quote": "totaling over 160GB of uncompressed text"
+    },
+    {
+      "question": "What tokenization does RoBERTa use, and what advantage does it give?",
+      "reference": "RoBERTa uses a byte-level BPE that operates on bytes rather than unicode characters as base subword units, which allows a modest vocabulary of about 50K units to encode any input text without introducing unknown tokens.",
+      "source": "roberta.pdf",
+      "page": 6,
+      "source_quote": "uses bytes instead of uni"
+    },
+    {
+      "question": "How many parameters does GPT-3 have and how was it evaluated?",
+      "reference": "GPT-3 is an autoregressive language model with 175 billion parameters, 10x more than any previous non-sparse language model, and it is applied without any gradient updates or fine-tuning, tested in the few-shot setting.",
+      "source": "gpt3-few-shot-learners.pdf",
+      "page": 1,
+      "source_quote": "an autoregressive language model with 175 billion parameters"
+    },
+    {
+      "question": "What are the parametric and non-parametric memories in the RAG architecture?",
+      "reference": "In RAG the parametric memory is a pre-trained seq2seq model, and the non-parametric memory is a dense vector index of Wikipedia accessed with a pre-trained neural retriever.",
+      "source": "rag.pdf",
+      "page": 1,
+      "source_quote": "the parametric memory is a pre-trained seq2seq model"
+    },
+    {
+      "question": "What is the difference between RAG-Sequence and RAG-Token?",
+      "reference": "RAG-Sequence uses the same retrieved document to predict every target token, whereas RAG-Token can predict each target token based on a different document. Both marginalize over the latent documents, but in different ways.",
+      "source": "rag.pdf",
+      "page": 3,
+      "source_quote": "RAG-Sequence, the model uses the same document to predict each target token"
+    },
+    {
+      "question": "Which retriever and which generator does the RAG model combine?",
+      "reference": "The retriever is the Dense Passage Retriever (DPR), which supplies latent documents conditioned on the input, and the generator is the BART seq2seq model, which conditions on those documents together with the input; the two are trained end-to-end with a top-K marginalization.",
+      "source": "rag.pdf",
+      "page": 2,
+      "source_quote": "The retriever (Dense Passage Retriever"
+    },
+    {
+      "question": "By how much does Dense Passage Retrieval outperform BM25, and on what measure?",
+      "reference": "The dense retriever outperforms a strong Lucene-BM25 system by 9%-19% absolute in top-20 passage retrieval accuracy across a range of open-domain QA datasets.",
+      "source": "dense-passage-retrieval.pdf",
+      "page": 1,
+      "source_quote": "9%-19% absolute in terms of top-20 passage retrieval accuracy"
+    },
+    {
+      "question": "What architecture does DPR use to embed questions and passages?",
+      "reference": "DPR uses a dual-encoder architecture built on the standard pre-trained BERT model, trained from pairs of questions and passages without additional pre-training.",
+      "source": "dense-passage-retrieval.pdf",
+      "page": 2,
+      "source_quote": "dual-encoder architecture"
+    }
+  ]
+}
